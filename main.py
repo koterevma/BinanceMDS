@@ -8,6 +8,7 @@ import os
 from time import time
 from datetime import datetime
 from datetime import timedelta
+from copy import deepcopy as copy
 
 
 def ts():
@@ -18,21 +19,13 @@ def next_day(dt):
     return dt + timedelta(days=1)
 
 
-class RequestId:
-    def __init__(self):
-        self._value = 1
-
-    def get(self):
-        self._value += 1
-        return self._value - 1
-
-
 class BinanceMDS:
     def __init__(self, ws_endpoint, symbol, folder='', loop=asyncio.new_event_loop()):
         websocket.enableTrace(False)
         self._ws = websocket.WebSocket()
         self._ws.connect(ws_endpoint)
-        self._ws_request_id = RequestId()
+        self._ws_next_id = 1
+        self._ws_requests = {}
 
         self._loop = loop
         self._is_running = False
@@ -144,13 +137,12 @@ class BinanceMDS:
     async def _subscribe(self):
         self._logger.info(f'subscribe: {[i for i in self._streams]}')
 
-        await self._write(json.dumps(
+        await self._write(json.dumps(self._add_id(
             {
                 'method': 'SUBSCRIBE',
-                'params': [self._symbol + '@' + self._streams[i] for i in self._streams],
-                'id': self._ws_request_id.get()
+                'params': [self._symbol + '@' + self._streams[i] for i in self._streams]
             }
-        ))
+        )))
 
     async def _handle(self):
         while self._is_running:
@@ -188,11 +180,27 @@ class BinanceMDS:
                                              self._headers['trade']),
                         datetime.today().date())
 
-    async def _write(self, data):
+            elif 'id' in data:
+                if 'error' in data:
+                    self._logger.error(f'{self._ws_requests[data["id"]]}, code: {data["error"]["code"]}')
+
+                    self.stop()
+                else:
+                    self._logger.info(f'{self._ws_requests[data["id"]]}, result: {data["result"]}')
+
+    def _add_id(self, data: dict) -> dict:
+        self._ws_requests.update(copy({self._ws_next_id: data}))
+        data.update({'id': self._ws_next_id})
+
+        self._ws_next_id += 1
+
+        return data
+
+    async def _write(self, data: str):
         self._logger.debug(f'send data: {data}')
         await self._loop.run_in_executor(None, self._ws.send, data)
 
-    async def _read(self):
+    async def _read(self) -> str:
         data = await self._loop.run_in_executor(None, self._ws.recv)
         self._logger.debug(f'recv data: {data}')
         return data
