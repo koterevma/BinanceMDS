@@ -153,6 +153,12 @@ class BinanceMDS:
         log_file = Path(self._logs_dir, self._symbol).with_suffix('.log')
         # https://docs.python.org/3/library/logging.handlers.html#watchedfilehandler
         log_handler = logging.handlers.WatchedFileHandler(log_file)
+        formatter = logging.Formatter(
+            '%(asctime)s [%(levelname)s] - %(name)s: %(message)s',
+            '%y-%m-%d %H:%M:%S'
+        )
+
+        log_handler.setFormatter(formatter)
 
         self._logger.addHandler(log_handler)
 
