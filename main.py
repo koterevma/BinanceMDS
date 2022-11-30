@@ -12,7 +12,7 @@ from datetime import timedelta
 from copy import deepcopy as copy
 from pathlib import Path
 from time import time
-from typing import Optional
+from typing import Optional, Union
 
 
 def ts():
@@ -24,7 +24,7 @@ def next_day(dt):
 
 
 class BinanceMDS:
-    def __init__(self, ws_endpoint: str, symbol: str, logs_dir: str, directory: str = '',
+    def __init__(self, ws_endpoint: str, symbol: str, directory: str = '',
                  loop: Optional[asyncio.AbstractEventLoop] = None):
         websocket.enableTrace(False)
         self._ws = websocket.WebSocket()
@@ -90,7 +90,6 @@ class BinanceMDS:
 
         self._opened_files = dict()
 
-        self._logs_dir = Path(logs_dir)
         self._setup_logger()
 
     def start(self):
@@ -140,27 +139,6 @@ class BinanceMDS:
     def _setup_logger(self):
         self._logger = logging.getLogger('binance_mds:' + self._symbol)
 
-        if not self._logs_dir.is_dir():
-            try:
-                self._logs_dir.mkdir()
-            except OSError as e:
-                if e.errno == errno.EACCES:
-                    raise RuntimeError(f'Unable to create {self._logs_dir.absolute()}.'
-                                       ' Please create directory with appropriate permissions')
-                else:
-                    raise
-
-        log_file = Path(self._logs_dir, self._symbol).with_suffix('.log')
-        # https://docs.python.org/3/library/logging.handlers.html#watchedfilehandler
-        log_handler = logging.handlers.WatchedFileHandler(log_file)
-        formatter = logging.Formatter(
-            '%(asctime)s [%(levelname)s] - %(name)s: %(message)s',
-            '%y-%m-%d %H:%M:%S'
-        )
-
-        log_handler.setFormatter(formatter)
-
-        self._logger.addHandler(log_handler)
 
     @staticmethod
     def _format_filename_for_current_date(file: Path) -> Path:
@@ -255,26 +233,52 @@ class BinanceMDS:
         return data
 
 
+def setup_logging(log_level: str, log_dir: Union[str, Path], symbol: str, num_log_keep: int):
+    log_dir = Path(log_dir)
+    numeric_level = getattr(logging, log_level.upper(), None)
+    if not log_dir.is_dir():
+        try:
+            log_dir.mkdir()
+        except OSError as e:
+            if e.errno == errno.EACCES:
+                raise RuntimeError(f'Unable to create {log_dir.absolute()}.'
+                                   ' Please create directory with appropriate permissions')
+            else:
+                raise
+
+    log_file = (log_dir / symbol).with_suffix('.log')
+    # https://docs.python.org/3/library/logging.handlers.html#watchedfilehandler
+    log_handler = logging.handlers.TimedRotatingFileHandler(
+            filename=log_file,
+            backupCount=num_log_keep,
+            when='midnight'
+        )
+
+    logging.basicConfig(
+            datefmt='%y-%m-%d %H:%M:%S',
+            format='%(asctime)s [%(levelname)s] - %(name)s: %(message)s',
+            handlers=(log_handler,),
+            level=numeric_level
+        )
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--symbol', type=str)
     parser.add_argument('-d', '--directory', type=str, default='.')
-    parser.add_argument('-l', '--log-level', type=str, default='info',
+    parser.add_argument('-l', '--log', type=str, default='info',
                         help='Logging level')
-    parser.add_argument('-g', '--logs-dir', type=str,
+    parser.add_argument('-g', '--log-dir', type=str,
                         default='/var/log/BinanceMDS',
                         help='Directory in which logs are stored')
+    parser.add_argument('-k', '--log-keep', type=int, default=2,
+                        help='Number of logs to keep after rotation')
     args = parser.parse_args()
 
-    numeric_level = getattr(logging, args.log_level.upper(), None)
-    logging.basicConfig(
-        format="[%(levelname)s] - %(name)s: %(message)s",
-        level=numeric_level
-    )
+    setup_logging(args.log, args.log_dir, args.symbol, args.log_keep)
 
     binance_mds = BinanceMDS('wss://stream.binance.com:9443/ws',
                              symbol=args.symbol,
-                             directory=args.directory,
-                             logs_dir=args.logs_dir)
+                             directory=args.directory)
 
     binance_mds.start()
