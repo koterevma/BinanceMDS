@@ -247,7 +247,7 @@ def setup_logging(log_level: str, log_dir: Union[str, Path], symbol: str, num_lo
                 raise
 
     log_file = (log_dir / symbol).with_suffix('.log')
-    # https://docs.python.org/3/library/logging.handlers.html#watchedfilehandler
+    # https://docs.python.org/3/library/logging.handlers.html#timedrotatingfilehandler
     log_handler = logging.handlers.TimedRotatingFileHandler(
             filename=log_file,
             backupCount=num_log_keep,
