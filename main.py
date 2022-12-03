@@ -1,14 +1,18 @@
-import signal
 import argparse
-import websocket
 import asyncio
+import errno
 import json
 import logging
-import os
-from time import time
+import logging.handlers
+import signal
+import websocket
+
 from datetime import datetime
 from datetime import timedelta
 from copy import deepcopy as copy
+from pathlib import Path
+from time import time
+from typing import Optional, Union
 
 
 def ts():
@@ -20,13 +24,16 @@ def next_day(dt):
 
 
 class BinanceMDS:
-    def __init__(self, ws_endpoint, symbol, folder='', loop=asyncio.new_event_loop()):
+    def __init__(self, ws_endpoint: str, symbol: str, directory: str = '',
+                 loop: Optional[asyncio.AbstractEventLoop] = None):
         websocket.enableTrace(False)
         self._ws = websocket.WebSocket()
         self._ws.connect(ws_endpoint)
         self._ws_next_id = 1
         self._ws_requests = {}
 
+        if loop is None:
+            loop = asyncio.new_event_loop()
         self._loop = loop
         self._is_running = False
 
@@ -77,13 +84,13 @@ class BinanceMDS:
                                     'ask[19].price, ask[19].amount\n'
                          }
 
-        if folder[-1] != '/': folder += '/'
-        self._folder = folder + self._symbol + '/'
-        self._files = {j: self._folder + j for j in self._streams}
 
-        self._opened_files = None
+        self._directory = Path(directory)
+        self._files: dict[str, Path] = {j: (self._directory / j) for j in self._streams}
 
-        self._logger = logging.getLogger('binance_mds:' + self._symbol)
+        self._opened_files = dict()
+
+        self._setup_logger()
 
     def start(self):
         self._logger.debug('start')
@@ -104,16 +111,22 @@ class BinanceMDS:
         self._logger.info(f'streams: {self._streams}')
         self._logger.info(f'files: {self._files}')
 
-        if not os.path.exists(self._folder):
-            os.mkdir(self._folder)
+        if not self._directory.is_dir():
+            self._directory.mkdir()
 
         self._opened_files = \
             {
-                j:
-                    (self._open_or_create(self._files[j] + '_' + str(datetime.today().date()) + '.csv',
-                                          self._headers[j]),
-                     datetime.today().date())
-                for j in self._files
+                stream:
+                    (
+                        self._open_or_create(
+                            self._format_filename_for_current_date(
+                                self._files[stream].with_suffix('.csv')
+                            ),
+                            self._headers[stream]
+                        ),
+                        datetime.today().date()
+                    )
+                    for stream in self._files
             }
 
         self._is_running = True
@@ -123,13 +136,21 @@ class BinanceMDS:
 
         await handle
 
-    def _open_or_create(self, file, header):
-        self._logger.info(f'open: {file}')
+    def _setup_logger(self):
+        self._logger = logging.getLogger('binance_mds:' + self._symbol)
 
-        was_exist = os.path.exists(file)
-        opened_file = open(file, 'a')
 
-        if not was_exist:
+    @staticmethod
+    def _format_filename_for_current_date(file: Path) -> Path:
+        return file.with_name(file.stem + '_' + str(datetime.today().date()) + file.suffix)
+
+    def _open_or_create(self, file: Path, header):
+        self._logger.info(f'opening: {file}')
+
+        file_exists = file.is_file()
+        opened_file = file.open('a')
+
+        if not file_exists:
             opened_file.write(header)
 
         return opened_file
@@ -159,8 +180,11 @@ class BinanceMDS:
                 if next_day(self._opened_files['depth20'][1]) <= datetime.today().date():
                     self._opened_files['depth20'][0].close()
                     self._opened_files['depth20'] = (
-                        self._open_or_create(self._files['depth20'] + '_' + str(datetime.today().date()) + '.csv',
-                                             self._headers['depth20']),
+                        self._open_or_create(
+                            self._format_filename_for_current_date(
+                                self._files['depth20'].with_suffix('.csv')
+                            ),
+                            self._headers['depth20']),
                         datetime.today().date())
 
             elif 'e' in data:
@@ -176,8 +200,11 @@ class BinanceMDS:
                 if next_day(self._opened_files['trade'][1]) <= datetime.today().date():
                     self._opened_files['trade'][0].close()
                     self._opened_files['trade'] = (
-                        self._open_or_create(self._files['trade'] + '_' + str(datetime.today().date()) + '.csv',
-                                             self._headers['trade']),
+                        self._open_or_create(
+                            self._format_filename_for_current_date(
+                                self._files['trade'].with_suffix('.csv')
+                            ),
+                            self._headers['trade']),
                         datetime.today().date())
 
             elif 'id' in data:
@@ -206,22 +233,52 @@ class BinanceMDS:
         return data
 
 
+def setup_logging(log_level: str, log_dir: Union[str, Path], symbol: str, num_log_keep: int):
+    log_dir = Path(log_dir)
+    numeric_level = getattr(logging, log_level.upper(), None)
+    if not log_dir.is_dir():
+        try:
+            log_dir.mkdir()
+        except OSError as e:
+            if e.errno == errno.EACCES:
+                raise RuntimeError(f'Unable to create {log_dir.absolute()}.'
+                                   ' Please create directory with appropriate permissions')
+            else:
+                raise
+
+    log_file = (log_dir / symbol).with_suffix('.log')
+    # https://docs.python.org/3/library/logging.handlers.html#timedrotatingfilehandler
+    log_handler = logging.handlers.TimedRotatingFileHandler(
+            filename=log_file,
+            backupCount=num_log_keep,
+            when='midnight'
+        )
+
+    logging.basicConfig(
+            datefmt='%y-%m-%d %H:%M:%S',
+            format='%(asctime)s [%(levelname)s] - %(name)s: %(message)s',
+            handlers=(log_handler,),
+            level=numeric_level
+        )
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--symbol', type=str, dest='symbol')
-    parser.add_argument('--folder', type=str, dest='folder')
-    parser.add_argument('--logging', type=str, dest='logging', default='info')
+    parser.add_argument('-s', '--symbol', type=str)
+    parser.add_argument('-d', '--directory', type=str, default='.')
+    parser.add_argument('-l', '--log', type=str, default='info',
+                        help='Logging level')
+    parser.add_argument('-g', '--log-dir', type=str,
+                        default='/var/log/BinanceMDS',
+                        help='Directory in which logs are stored')
+    parser.add_argument('-k', '--log-keep', type=int, default=2,
+                        help='Number of logs to keep after rotation')
     args = parser.parse_args()
 
-    if args.logging == 'info':
-        logging.basicConfig(format="[%(levelname)s] - %(name)s: %(message)s", level=logging.INFO)
-    elif args.logging == 'debug':
-        logging.basicConfig(format="[%(levelname)s] - %(name)s: %(message)s", level=logging.DEBUG)
-    else:
-        exit(-1)
+    setup_logging(args.log, args.log_dir, args.symbol, args.log_keep)
 
     binance_mds = BinanceMDS('wss://stream.binance.com:9443/ws',
                              symbol=args.symbol,
-                             folder=args.folder)
+                             directory=args.directory)
 
     binance_mds.start()
