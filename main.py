@@ -93,7 +93,7 @@ class BinanceMDS:
         self._logger.info(f'files: {self._files}')
 
         if not self._directory.is_dir():
-            self._directory.mkdir()
+            self._directory.mkdir(parents=True)
 
         self._is_running = True
 
@@ -101,7 +101,7 @@ class BinanceMDS:
         self._handle()
         self._deinit()
 
-    def stop(self, sig=None, frame=None):
+    def stop(self, *unused):
         self._logger.debug('stop')
 
         self._is_running = False
