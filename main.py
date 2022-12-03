@@ -7,6 +7,8 @@ import signal
 import websocket
 import functools
 import datetime
+import headers
+
 from copy import deepcopy as copy
 from pathlib import Path
 from time import time
@@ -28,50 +30,7 @@ class BinanceMDS:
         self._symbol = symbol
         self._streams = {'trade': 'trade', 'depth20': 'depth20@100ms'}
 
-        self._headers = {'trade': 'ts, trade id, price, amount, maker side\n',
-                         'depth20': 'ts, '
-                                    'bid[0].price, bid[0].amount, '
-                                    'bid[1].price, bid[1].amount, '
-                                    'bid[2].price, bid[2].amount, '
-                                    'bid[3].price, bid[3].amount, '
-                                    'bid[4].price, bid[4].amount, '
-                                    'bid[5].price, bid[5].amount, '
-                                    'bid[6].price, bid[6].amount, '
-                                    'bid[7].price, bid[7].amount, '
-                                    'bid[8].price, bid[8].amount, '
-                                    'bid[9].price, bid[9].amount, '
-                                    'bid[10].price, bid[10].amount, '
-                                    'bid[11].price, bid[11].amount, '
-                                    'bid[12].price, bid[12].amount, '
-                                    'bid[13].price, bid[13].amount, '
-                                    'bid[14].price, bid[14].amount, '
-                                    'bid[15].price, bid[15].amount, '
-                                    'bid[16].price, bid[16].amount, '
-                                    'bid[17].price, bid[17].amount, '
-                                    'bid[18].price, bid[18].amount, '
-                                    'bid[19].price, bid[19].amount, '
-
-                                    'ask[0].price, ask[0].amount, '
-                                    'ask[1].price, ask[1].amount, '
-                                    'ask[2].price, ask[2].amount, '
-                                    'ask[3].price, ask[3].amount, '
-                                    'ask[4].price, ask[4].amount, '
-                                    'ask[5].price, ask[5].amount, '
-                                    'ask[6].price, ask[6].amount, '
-                                    'ask[7].price, ask[7].amount, '
-                                    'ask[8].price, ask[8].amount, '
-                                    'ask[9].price, ask[9].amount, '
-                                    'ask[10].price, ask[10].amount, '
-                                    'ask[11].price, ask[11].amount, '
-                                    'ask[12].price, ask[12].amount, '
-                                    'ask[13].price, ask[13].amount, '
-                                    'ask[14].price, ask[14].amount, '
-                                    'ask[15].price, ask[15].amount, '
-                                    'ask[16].price, ask[16].amount, '
-                                    'ask[17].price, ask[17].amount, '
-                                    'ask[18].price, ask[18].amount, '
-                                    'ask[19].price, ask[19].amount\n'
-                         }
+        self._headers = headers.get_headers()
 
         self._directory = Path(directory) / self._symbol
         self._files: dict[str, Path] = {j: (self._directory / (self._symbol + "_" + j)) for j in self._streams}
