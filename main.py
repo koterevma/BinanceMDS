@@ -12,7 +12,7 @@ from datetime import timedelta
 from copy import deepcopy as copy
 from pathlib import Path
 from time import time
-from typing import Optional, Union
+from typing import Union
 
 
 def ts():
@@ -24,17 +24,14 @@ def next_day(dt):
 
 
 class BinanceMDS:
-    def __init__(self, ws_endpoint: str, symbol: str, directory: str = '',
-                 loop: Optional[asyncio.AbstractEventLoop] = None):
+    def __init__(self, ws_endpoint: str, symbol: str, directory: str = ''):
         websocket.enableTrace(False)
         self._ws = websocket.WebSocket()
         self._ws.connect(ws_endpoint)
         self._ws_next_id = 1
         self._ws_requests = {}
 
-        if loop is None:
-            loop = asyncio.new_event_loop()
-        self._loop = loop
+        self._loop = asyncio.new_event_loop()
         self._is_running = False
 
         self._symbol = symbol
@@ -241,8 +238,8 @@ def setup_logging(log_level: str, log_dir: Union[str, Path], symbol: str, num_lo
             log_dir.mkdir()
         except OSError as e:
             if e.errno == errno.EACCES:
-                raise RuntimeError(f'Unable to create {log_dir.absolute()}.'
-                                   ' Please create directory with appropriate permissions')
+                raise RuntimeError('Unable to create directory '
+                                   f'{log_dir.absolute()} : ' + e.strerror)
             else:
                 raise
 
