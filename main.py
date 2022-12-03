@@ -27,7 +27,7 @@ class BinanceMDS:
     def __init__(self, ws_endpoint: str, symbol: str, directory: str = ''):
         websocket.enableTrace(False)
         self._ws = websocket.WebSocket()
-        self._ws.connect(ws_endpoint)
+        self._ws.connect(ws_endpoint, timeout=10)
         self._ws_next_id = 1
         self._ws_requests = {}
 
@@ -83,7 +83,7 @@ class BinanceMDS:
 
 
         self._directory = Path(directory)
-        self._files: dict[str, Path] = {j: (self._directory / j) for j in self._streams}
+        self._files: dict[str, Path] = {j: (self._directory / self._symbol / j) for j in self._streams}
 
         self._opened_files = dict()
 
@@ -110,6 +110,10 @@ class BinanceMDS:
 
         if not self._directory.is_dir():
             self._directory.mkdir()
+
+        symbol_data_dir = self._directory / self._symbol
+        if not symbol_data_dir.is_dir():
+            symbol_data_dir.mkdir()
 
         self._opened_files = \
             {
@@ -225,7 +229,8 @@ class BinanceMDS:
         await self._loop.run_in_executor(None, self._ws.send, data)
 
     async def _read(self) -> str:
-        data = await self._loop.run_in_executor(None, self._ws.recv)
+        recv_task = self._loop.run_in_executor(None, self._ws.recv)
+        data = await asyncio.wait_for(recv_task, 10)
         self._logger.debug(f'recv data: {data}')
         return data
 
