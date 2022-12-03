@@ -1,5 +1,4 @@
 import argparse
-import asyncio
 import errno
 import json
 import logging
@@ -25,9 +24,6 @@ class BinanceMDS:
         self._ws.connect(ws_endpoint)
         self._ws_next_id = 1
         self._ws_requests = {}
-
-        self._loop = asyncio.new_event_loop()
-        self._is_running = False
 
         self._symbol = symbol
         self._streams = {'trade': 'trade', 'depth20': 'depth20@100ms'}
@@ -84,20 +80,19 @@ class BinanceMDS:
 
         self._setup_logger()
 
+        self._is_running = False
+
     def start(self):
         self._logger.debug('start')
 
-        self._loop.add_signal_handler(signal.SIGINT, self.stop)
-        self._loop.add_signal_handler(signal.SIGTERM, self.stop)
-
-        self._loop.run_until_complete(self.run())
+        self.run()
 
     def stop(self):
         self._logger.debug('stop')
 
         self._is_running = False
 
-    async def run(self):
+    def run(self):
         self._logger.debug('run')
         self._logger.info(f'symbol: {self._symbol}')
         self._logger.info(f'streams: {self._streams}')
@@ -108,16 +103,15 @@ class BinanceMDS:
 
         self._is_running = True
 
-        handle = self._loop.create_task(self._handle())
-        await self._init()
-        await handle
+        self._init()
+        self._handle()
 
     def _setup_logger(self):
         self._logger = logging.getLogger('binance_mds:' + self._symbol)
 
-    async def _init(self):
+    def _init(self):
         self._open_today_files()
-        await self._subscribe()
+        self._subscribe()
 
     def _open_today_files(self):
         self._current_files_date = datetime.date.today()
@@ -153,19 +147,19 @@ class BinanceMDS:
 
         return opened_file
 
-    async def _subscribe(self):
+    def _subscribe(self):
         self._logger.info(f'subscribe: {[i for i in self._streams]}')
 
-        await self._write(json.dumps(self._add_id(
+        self._write(json.dumps(self._add_id(
             {
                 'method': 'SUBSCRIBE',
                 'params': [self._symbol + '@' + self._streams[i] for i in self._streams]
             }
         )))
 
-    async def _handle(self):
+    def _handle(self):
         while self._is_running:
-            data = json.loads(await self._read())
+            data = json.loads(self._read())
 
             current_date = datetime.date.today()
 
@@ -207,13 +201,16 @@ class BinanceMDS:
 
         return data
 
-    async def _write(self, data: str):
+    def _write(self, data: str):
         self._logger.debug(f'send data: {data}')
-        await self._loop.run_in_executor(None, self._ws.send, data)
 
-    async def _read(self) -> str:
-        data = await self._loop.run_in_executor(None, self._ws.recv)
+        return self._ws.send(data)
+
+    def _read(self) -> str:
+        data = self._ws.recv()
+
         self._logger.debug(f'recv data: {data}')
+
         return data
 
 
@@ -225,8 +222,8 @@ def setup_logging(log_level: str, log_dir: Union[str, Path], symbol: str, num_lo
             log_dir.mkdir()
         except OSError as e:
             if e.errno == errno.EACCES:
-                raise RuntimeError('Unable to create directory '
-                                   f'{log_dir.absolute()} : ' + e.strerror)
+                raise RuntimeError(f'Unable to create {log_dir.absolute()}.'
+                                   ' Please create directory with appropriate permissions')
             else:
                 raise
 
