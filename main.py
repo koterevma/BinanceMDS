@@ -21,12 +21,13 @@ class BinanceMDS:
     def __init__(self, ws_endpoint: str, symbol: str, directory: str = ''):
         websocket.enableTrace(False)
         self._ws = websocket.WebSocket()
-        self._ws.connect(ws_endpoint)
+        self._ws_endpoint = ws_endpoint
         self._ws_next_id = 1
         self._ws_requests = {}
 
         self._symbol = symbol
         self._streams = {'trade': 'trade', 'depth20': 'depth20@100ms'}
+
         self._headers = {'trade': 'ts, trade id, price, amount, maker side\n',
                          'depth20': 'ts, '
                                     'bid[0].price, bid[0].amount, '
@@ -78,19 +79,9 @@ class BinanceMDS:
         self._current_files_date = None
         self._opened_files = dict()
 
-        self._setup_logger()
-
         self._is_running = False
 
-    def start(self):
-        self._logger.debug('start')
-
-        self.run()
-
-    def stop(self):
-        self._logger.debug('stop')
-
-        self._is_running = False
+        self._logger = logging.getLogger('binance_mds:' + self._symbol)
 
     def run(self):
         self._logger.debug('run')
@@ -106,12 +97,20 @@ class BinanceMDS:
         self._init()
         self._handle()
 
-    def _setup_logger(self):
-        self._logger = logging.getLogger('binance_mds:' + self._symbol)
-
     def _init(self):
         self._open_today_files()
+
+        self._ws.connect(self._ws_endpoint)
         self._subscribe()
+
+    def _reinit(self):
+        self._close_files()
+
+        if self._ws.getstatus():
+            self._ws.close()
+        self._ws.connect(self._ws_endpoint)
+
+        self._init()
 
     def _open_today_files(self):
         self._current_files_date = datetime.date.today()
@@ -121,7 +120,6 @@ class BinanceMDS:
                     self._open_or_create(
                         self._format_filename_for_date(
                             self._files[stream].with_suffix('.csv'),
-                            self._current_files_date
                         ),
                         self._headers[stream]
                     )
@@ -132,9 +130,8 @@ class BinanceMDS:
         for file in self._opened_files.values():
             file.close()
 
-    @staticmethod
-    def _format_filename_for_date(file: Path, date: datetime.date) -> Path:
-        return file.with_name(file.stem + '_' + str(date) + file.suffix)
+    def _format_filename_for_date(self, file: Path) -> Path:
+        return file.with_name(file.stem + '_' + str(self._current_files_date) + file.suffix)
 
     def _open_or_create(self, file: Path, header):
         self._logger.info(f'opening: {file}')
@@ -150,22 +147,19 @@ class BinanceMDS:
     def _subscribe(self):
         self._logger.info(f'subscribe: {[i for i in self._streams]}')
 
-        self._write(json.dumps(self._add_id(
+        self._send_request(
             {
                 'method': 'SUBSCRIBE',
                 'params': [self._symbol + '@' + self._streams[i] for i in self._streams]
             }
-        )))
+        )
 
     def _handle(self):
         while self._is_running:
             data = json.loads(self._read())
 
-            current_date = datetime.date.today()
-
-            if current_date > self._current_files_date:
-                self._close_files()
-                self._open_today_files()
+            if datetime.date.today() > self._current_files_date:
+                self._reinit()
 
             if 'lastUpdateId' in data:
                 self._opened_files['depth20'].write(f'{ts()}')
@@ -188,18 +182,16 @@ class BinanceMDS:
             elif 'id' in data:
                 if 'error' in data:
                     self._logger.error(f'{self._ws_requests[data["id"]]}, code: {data["error"]["code"]}')
-
-                    self.stop()
                 else:
                     self._logger.info(f'{self._ws_requests[data["id"]]}, result: {data["result"]}')
 
-    def _add_id(self, data: dict) -> dict:
+    def _send_request(self, data: dict):
         self._ws_requests.update(copy({self._ws_next_id: data}))
         data.update({'id': self._ws_next_id})
 
-        self._ws_next_id += 1
+        self._write(json.dumps(data))
 
-        return data
+        self._ws_next_id += 1
 
     def _write(self, data: str):
         self._logger.debug(f'send data: {data}')
@@ -262,4 +254,4 @@ if __name__ == '__main__':
                              symbol=args.symbol,
                              directory=args.directory)
 
-    binance_mds.start()
+    binance_mds.run()
