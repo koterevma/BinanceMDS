@@ -83,6 +83,9 @@ class BinanceMDS:
 
         self._logger = logging.getLogger('binance_mds:' + self._symbol)
 
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.stop)
+
     def run(self):
         self._logger.debug('run')
         self._logger.info(f'symbol: {self._symbol}')
@@ -97,19 +100,25 @@ class BinanceMDS:
         self._init()
         self._handle()
 
+    def stop(self):
+        self._is_running = False
+
+        self._deinit()
+
     def _init(self):
         self._open_today_files()
 
         self._ws.connect(self._ws_endpoint)
         self._subscribe()
 
-    def _reinit(self):
+    def _deinit(self):
         self._close_files()
 
         if self._ws.getstatus():
             self._ws.close()
-        self._ws.connect(self._ws_endpoint)
 
+    def _reinit(self):
+        self._deinit()
         self._init()
 
     def _open_today_files(self):
@@ -181,6 +190,8 @@ class BinanceMDS:
 
             elif 'id' in data:
                 if 'error' in data:
+                    self.stop()
+
                     self._logger.error(f'{self._ws_requests[data["id"]]}, code: {data["error"]["code"]}')
                 else:
                     self._logger.info(f'{self._ws_requests[data["id"]]}, result: {data["result"]}')
