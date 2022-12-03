@@ -5,7 +5,7 @@ import logging
 import logging.handlers
 import signal
 import websocket
-
+import functools
 import datetime
 from copy import deepcopy as copy
 from pathlib import Path
@@ -83,8 +83,8 @@ class BinanceMDS:
 
         self._logger = logging.getLogger('binance_mds:' + self._symbol)
 
-        signal.signal(signal.SIGINT, self.stop)
-        signal.signal(signal.SIGTERM, self.stop)
+        signal.signal(signal.SIGINT, functools.partial(self.stop, self).func)
+        signal.signal(signal.SIGTERM, functools.partial(self.stop, self).func)
 
     def run(self):
         self._logger.debug('run')
@@ -99,25 +99,32 @@ class BinanceMDS:
 
         self._init()
         self._handle()
-
-    def stop(self):
-        self._is_running = False
-
         self._deinit()
 
+    def stop(self, sig=None, frame=None):
+        self._logger.debug('stop')
+
+        self._is_running = False
+
     def _init(self):
+        self._logger.debug('init')
+
         self._open_today_files()
 
         self._ws.connect(self._ws_endpoint)
         self._subscribe()
 
     def _deinit(self):
+        self._logger.debug('deinit')
+
         self._close_files()
 
         if self._ws.getstatus():
             self._ws.close()
 
     def _reinit(self):
+        self._logger.debug('reinit')
+
         self._deinit()
         self._init()
 
@@ -241,7 +248,7 @@ def setup_logging(log_level: str, log_dir: Union[str, Path], symbol: str, num_lo
     logging.basicConfig(
         datefmt='%y-%m-%d %H:%M:%S',
         format='%(asctime)s [%(levelname)s] - %(name)s: %(message)s',
-        # handlers=(log_handler,), # TODO: for debug, remove after
+        handlers=(log_handler,),
         level=numeric_level
     )
 
