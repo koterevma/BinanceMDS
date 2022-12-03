@@ -7,8 +7,7 @@ import logging.handlers
 import signal
 import websocket
 
-from datetime import datetime
-from datetime import timedelta
+import datetime
 from copy import deepcopy as copy
 from pathlib import Path
 from time import time
@@ -17,10 +16,6 @@ from typing import Union
 
 def ts():
     return int(time())
-
-
-def next_day(dt):
-    return dt + timedelta(days=1)
 
 
 class BinanceMDS:
@@ -81,10 +76,10 @@ class BinanceMDS:
                                     'ask[19].price, ask[19].amount\n'
                          }
 
+        self._directory = Path(directory) / self._symbol
+        self._files: dict[str, Path] = {j: (self._directory / (self._symbol + "_" + j)) for j in self._streams}
 
-        self._directory = Path(directory)
-        self._files: dict[str, Path] = {j: (self._directory / j) for j in self._streams}
-
+        self._current_files_date = None
         self._opened_files = dict()
 
         self._setup_logger()
@@ -111,35 +106,41 @@ class BinanceMDS:
         if not self._directory.is_dir():
             self._directory.mkdir()
 
-        self._opened_files = \
-            {
-                stream:
-                    (
-                        self._open_or_create(
-                            self._format_filename_for_current_date(
-                                self._files[stream].with_suffix('.csv')
-                            ),
-                            self._headers[stream]
-                        ),
-                        datetime.today().date()
-                    )
-                    for stream in self._files
-            }
-
         self._is_running = True
 
         handle = self._loop.create_task(self._handle())
-        await self._subscribe()
-
+        await self._init()
         await handle
 
     def _setup_logger(self):
         self._logger = logging.getLogger('binance_mds:' + self._symbol)
 
+    async def _init(self):
+        self._open_today_files()
+        await self._subscribe()
+
+    def _open_today_files(self):
+        self._current_files_date = datetime.date.today()
+        self._opened_files = \
+            {
+                stream:
+                    self._open_or_create(
+                        self._format_filename_for_date(
+                            self._files[stream].with_suffix('.csv'),
+                            self._current_files_date
+                        ),
+                        self._headers[stream]
+                    )
+                for stream in self._files
+            }
+
+    def _close_files(self):
+        for file in self._opened_files.values():
+            file.close()
 
     @staticmethod
-    def _format_filename_for_current_date(file: Path) -> Path:
-        return file.with_name(file.stem + '_' + str(datetime.today().date()) + file.suffix)
+    def _format_filename_for_date(file: Path, date: datetime.date) -> Path:
+        return file.with_name(file.stem + '_' + str(date) + file.suffix)
 
     def _open_or_create(self, file: Path, header):
         self._logger.info(f'opening: {file}')
@@ -166,23 +167,19 @@ class BinanceMDS:
         while self._is_running:
             data = json.loads(await self._read())
 
-            if 'lastUpdateId' in data:
-                self._opened_files['depth20'][0].write(f'{ts()}')
-                for bid in data['bids']:
-                    self._opened_files['depth20'][0].write(f', {bid[0]}, {bid[1]}')
-                for ask in data['asks']:
-                    self._opened_files['depth20'][0].write(f', {ask[0]}, {ask[1]}')
-                self._opened_files['depth20'][0].write('\n')
+            current_date = datetime.date.today()
 
-                if next_day(self._opened_files['depth20'][1]) <= datetime.today().date():
-                    self._opened_files['depth20'][0].close()
-                    self._opened_files['depth20'] = (
-                        self._open_or_create(
-                            self._format_filename_for_current_date(
-                                self._files['depth20'].with_suffix('.csv')
-                            ),
-                            self._headers['depth20']),
-                        datetime.today().date())
+            if current_date > self._current_files_date:
+                self._close_files()
+                self._open_today_files()
+
+            if 'lastUpdateId' in data:
+                self._opened_files['depth20'].write(f'{ts()}')
+                for bid in data['bids']:
+                    self._opened_files['depth20'].write(f', {bid[0]}, {bid[1]}')
+                for ask in data['asks']:
+                    self._opened_files['depth20'].write(f', {ask[0]}, {ask[1]}')
+                self._opened_files['depth20'].write('\n')
 
             elif 'e' in data:
                 def who_maker(is_buyer_maker):
@@ -190,19 +187,9 @@ class BinanceMDS:
                         return 'b'
                     return 's'
 
-                self._opened_files['trade'][0].write(f'{ts()}')
-                self._opened_files['trade'][0].write(f', {data["t"]}, {data["p"]}, {data["q"]}, {who_maker(data["m"])}')
-                self._opened_files['trade'][0].write('\n')
-
-                if next_day(self._opened_files['trade'][1]) <= datetime.today().date():
-                    self._opened_files['trade'][0].close()
-                    self._opened_files['trade'] = (
-                        self._open_or_create(
-                            self._format_filename_for_current_date(
-                                self._files['trade'].with_suffix('.csv')
-                            ),
-                            self._headers['trade']),
-                        datetime.today().date())
+                self._opened_files['trade'].write(f'{ts()}')
+                self._opened_files['trade'].write(f', {data["t"]}, {data["p"]}, {data["q"]}, {who_maker(data["m"])}')
+                self._opened_files['trade'].write('\n')
 
             elif 'id' in data:
                 if 'error' in data:
@@ -246,17 +233,17 @@ def setup_logging(log_level: str, log_dir: Union[str, Path], symbol: str, num_lo
     log_file = (log_dir / symbol).with_suffix('.log')
     # https://docs.python.org/3/library/logging.handlers.html#timedrotatingfilehandler
     log_handler = logging.handlers.TimedRotatingFileHandler(
-            filename=log_file,
-            backupCount=num_log_keep,
-            when='midnight'
-        )
+        filename=log_file,
+        backupCount=num_log_keep,
+        when='midnight'
+    )
 
     logging.basicConfig(
-            datefmt='%y-%m-%d %H:%M:%S',
-            format='%(asctime)s [%(levelname)s] - %(name)s: %(message)s',
-            handlers=(log_handler,),
-            level=numeric_level
-        )
+        datefmt='%y-%m-%d %H:%M:%S',
+        format='%(asctime)s [%(levelname)s] - %(name)s: %(message)s',
+        # handlers=(log_handler,), # TODO: for debug, remove after
+        level=numeric_level
+    )
 
 
 if __name__ == '__main__':
